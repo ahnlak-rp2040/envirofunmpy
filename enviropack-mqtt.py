@@ -132,7 +132,7 @@ def render_display():
       display.set_pen(RED)
   if final_temperature < 10:
       display.set_pen(CYAN)
-  display.text(f"{final_temperature:.1f}°C", 5, 75, WIDTH, scale=4)
+  display.text(f"{final_temperature:.1f}°C", (WIDTH - display.measure_text(f"{final_temperature:.1f}°C", scale=4)) // 2, 75, WIDTH, scale=4)
 
   # Divide the lower part of the screen (two lines ~= 64 pixels)
   display.set_pen(YELLOW)
@@ -160,7 +160,7 @@ def render_display():
         for y in range(0,4):
             display.sprite(x, y, (x - 4) * 8, (y + 26) * 8)
   display.set_pen(WHITE)
-  display.text(f"{final_pressure:04.0f}", 30, 210, scale=3)
+  display.text(f"{final_pressure:4.0f}", 90 - display.measure_text(f"{final_pressure:4.0f}", scale=3), 210, scale=3)
   display.text("hPa", 90, 215, scale=2)
 
   # And bottom right is lux
@@ -168,7 +168,7 @@ def render_display():
         for y in range(0,4):
             display.sprite(x, y, (x + 8) * 8, (y + 26) * 8)
   display.set_pen(WHITE)
-  display.text(f"{final_lux:03.0f}", 160, 210, scale=3)
+  display.text(f"{final_lux:3.0f}", 205 - display.measure_text(f"{final_lux:3.0f}", scale=3), 210, scale=3)
   display.text("lux", 205, 215, scale=2)
 
   # Finally, update the display

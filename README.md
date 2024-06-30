@@ -14,8 +14,8 @@ Share and Enjoy.
 
 ---
 
-Enviro Pack
------------
+Enviro Pack MQTT
+----------------
 
 `enviropack-mqtt.py` is the offspring of a couple of the Pimoroni examples;
 merging the nice display of `enviro_all.py` and the connectivity of 
