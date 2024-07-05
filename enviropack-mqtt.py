@@ -27,10 +27,12 @@ MQTT_BROKER_IP    = "YOUR_BROKER_IP"          # IP of your MQTT broker server
 MQTT_BROKER_USER  = "YOUR_BROKER_USERNAME"    # Username for your broker
 MQTT_BROKER_PASS  = "YOUR_BROKER_PASSWORD"    # Password for your broker
 MQTT_UPDATE_FREQ  = 60                        # Seconds between MQTT updates
+MQTT_PREFIX       = "PicoEnviro"              # A prefix used for all updates
 
 # Corrections, to try and normalise the readings
 CORRECT_TEMP      = -7.5                      # Seems to be the USB-powered bump
 CORRECT_ALTITUDE  = 75                        # Altitude in metres
+CORRECT_TZ        = 60                        # Minutes to add to UTC for localtime
 
 
 ###################
@@ -39,6 +41,7 @@ CORRECT_ALTITUDE  = 75                        # Altitude in metres
 
 # Import everything we'll need; this is all rolled into the Pimoroni uf2
 import time
+import ntptime
 import uasyncio
 from   machine          import Pin, ADC
 from   picographics     import PicoGraphics, DISPLAY_ENVIRO_PLUS
@@ -85,12 +88,30 @@ def read_bme():
   # (this correction is from the Pimoroni examples - I don't understand it!)
   final_pressure = (pressure / 100) + \
                    (((pressure / 100) * 9.80665 * CORRECT_ALTITUDE) / \
-                    (287 * final_temperature + (CORRECT_ALTITUDE / 400)))
+                     (287 * (273 + final_temperature + (CORRECT_ALTITUDE / 400))))
 
   # Process the humidity reading; correct for temperature / dewpoint
   dewpoint = temperature - ((100 - humidity) / 5)
   final_humidity = 100 - (5 * (final_temperature - dewpoint))
 
+
+def read_ltr():
+  """
+  Reads the values we want from the LTR559 sensor; just Lux, really
+  """
+  global final_lux
+
+  ltr_reading = ltr.get_reading()
+  lux = ltr_reading[BreakoutLTR559.LUX]
+
+  # Normalise this
+  if lux < 0:
+    lux = 0
+  if lux > 999:
+    lux = 999
+
+  # And store this in the global
+  final_lux = lux
 
 
 def render_display():
@@ -172,7 +193,67 @@ def render_display():
   display.text("lux", 205, 215, scale=2)
 
   # Finally, update the display
-  display.update()    
+  display.update()
+
+
+def sync_ntp():
+  """
+  Will attempt to update our clock via NTP. Will connect to WiFi if necessary.
+  """
+  global last_ntp_sync
+
+  # If the network isn't up, make it so.
+  if not network_manager.isconnected():
+    led.set_rgb(255, 0, 0)
+    uasyncio.get_event_loop().run_until_complete(network_manager.client(WIFI_SSID, WIFI_PASS))
+    led.set_rgb(0, 255, 255)
+
+  # Now try and pull the time over NTP
+  ntptime.settime()
+  led.set_rgb(0, 255, 0)
+
+  # Apply any timezone correction we have; RTC format is obviously *different*
+  # from gmtime, so we have to massage it from:
+  # (year, month, mday, hour, minute, second, weekday, yearday)
+  # into:
+  # (year, month, day, weekday, hours, minutes, seconds, subseconds)
+  lt = time.gmtime(time.time() + (CORRECT_TZ * 60))
+  machine.RTC().datetime((lt[0], lt[1], lt[2], lt[6], lt[3], lt[4], lt[5], 0))
+
+  # And remember when this was last done
+  last_ntp_sync = time.time()
+
+
+def post_mqtt():
+  """
+  Attempts to post the current data to the MQTT broker. Will connect to WiFi
+  if necessary.
+  """
+  global last_mqtt_send
+
+  # If the network isn't up, make it so.
+  if not network_manager.isconnected():
+    led.set_rgb(255, 0, 0)
+    uasyncio.get_event_loop().run_until_complete(network_manager.client(WIFI_SSID, WIFI_PASS))
+    led.set_rgb(0, 255, 255)
+
+  # Now ask our MQTT client to send some data.
+  try:
+    led.set_rgb(0, 255, 0)
+    mqtt_client.connect()
+    mqtt_client.publish(topic=f"{MQTT_PREFIX}/Temperature", msg=str(final_temperature))
+    mqtt_client.publish(topic=f"{MQTT_PREFIX}/Humidity", msg=str(final_humidity))
+    mqtt_client.publish(topic=f"{MQTT_PREFIX}/Pressure", msg=str(final_pressure))
+    mqtt_client.publish(topic=f"{MQTT_PREFIX}/Lux", msg=str(final_lux))
+    mqtt_client.disconnect()
+  except Exception as e:
+    print(e)
+    led.set_rgb(0, 255, 255)
+  else:
+    led.set_rgb(0, 0, 0)
+
+  # And remember when it was done
+  last_mqtt_send = time.time()
 
 
 ###################
@@ -212,6 +293,12 @@ final_pressure = 0
 final_humidity = 0
 final_lux = 0
 
+# Set up network related things
+network_manager = NetworkManager(WIFI_CC);
+mqtt_client = umqtt.simple.MQTTClient(client_id=MQTT_CLIENT_ID, server=MQTT_BROKER_IP, user=MQTT_BROKER_USER, password=MQTT_BROKER_PASS)
+last_ntp_sync = 0
+last_mqtt_send = 0
+
 # Now enter the main processing loop
 while True:
 
@@ -219,11 +306,18 @@ while True:
 
   # Fetch readings from our various sensors
   read_bme()
+  read_ltr()
+
+  # See if we're due to sync the clock
+  if last_ntp_sync < (time.time() - 86400):
+    sync_ntp()
+
+  # Check to see if an MQTT update is due
+  if last_mqtt_send < (time.time() - MQTT_UPDATE_FREQ):
+    post_mqtt()
 
   # Render the display
   render_display()
-
-  # Check to see if an MQTT update is due
 
   # Wait briefly before the next cycle
   time.sleep(1)
